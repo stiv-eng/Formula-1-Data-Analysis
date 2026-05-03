@@ -1,0 +1,219 @@
+import fastf1 as ff1
+from fastf1 import plotting
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.colors as mcolors
+import matplotlib as mpl
+import seaborn as sns
+import numpy as np
+import matplotlib.ticker as ticker
+from matplotlib.ticker import MaxNLocator
+from utils_func import format_laptime
+from matplotlib.collections import LineCollection
+from DarkF1_Plotting_Theme import apply_f1_dark_theme
+from Page_2 import load_page_2
+from Page_3 import load_page_3
+from Page_4 import load_page_4
+
+# Function that defines the plotting settings (colours, background color, etc..)
+apply_f1_dark_theme()
+
+
+# Load Main Session from FF1
+GP = "Chinese Grand Prix"
+Session = "R"
+Driver = "LEC"
+Year = 2025
+session = ff1.get_session(Year, GP, Session)
+session.load(weather=False)
+
+# Print event Schedule to know how all events are named in the FF1 database.
+schedule = ff1.get_event_schedule(Year)
+print(schedule["EventName"].tolist())
+
+# Retrieve laps data from Main Session (session).
+df_laps = session.laps
+
+# Pick laps from the driver "Driver". 
+# Also add a column to the database with Total Seconds Time.
+df_laps = df_laps.pick_drivers(Driver)
+df_laps["LapTimeS"] = df_laps["LapTime"].dt.total_seconds()
+
+# Create on object gridpsec() to insert graphs. 
+fig = plt.figure()
+
+# Insert Graphs for Page 1
+fig.suptitle(f"{Year} {GP} GP – Session: {Session}", fontsize=16, fontweight="bold")
+fig.text(0.5, 0.93, f"Driver: {Driver}", ha="center", fontsize=11)
+
+gs = gridspec.GridSpec(10,14, figure = fig)
+
+# Plot 1: Lap Times vs Lap Number
+ax1 = fig.add_subplot(gs[0:4,0:5])
+ax1.grid(True)
+ax1.set_xlabel("Lap Number")
+ax1.set_ylabel("Lap Time [s]")
+ax1.set_title(f"Lap Times {Driver}")
+ax1.plot(df_laps["LapNumber"], df_laps["LapTimeS"])
+ax1.yaxis.set_major_formatter(ticker.FuncFormatter(format_laptime))
+ax1.yaxis.set_major_locator(MaxNLocator(nbins = 15))
+
+# Plot 2: Lap Times vs Tyre Life
+ax2 = fig.add_subplot(gs[6:,0:5])
+ax2.grid(True)
+ax2.set_xlabel("Tyre Life [Laps]")
+ax2.set_ylabel("Lap Time [s]")
+ax2.set_title(f"Tyres Stint Times {Driver}")
+
+# Plot 3: Lap Times vs Tyre Life (divided per Tyre Stints)
+
+# Define the colours to identify each type of tyres (follow F1 standard).
+Compounds_Colors = {
+    "['SOFT']": "red",
+    "['MEDIUM']": "orange",
+    "['HARD']": "grey"
+}
+
+Stints = df_laps["Stint"].unique()
+counter = 0
+
+# Plot a graph for each stint, with personalised colours depending on the compound type. 
+for stint in Stints:
+    counter += 1
+
+    # Pick the rows in the database that belong to just one stint, for the columns "TyreLife" and "LapTimeS".
+    x = df_laps.loc[df_laps["Stint"] == stint]["TyreLife"]
+    y = df_laps.loc[df_laps["Stint"] == stint]["LapTimeS"]
+    compound = str(df_laps.loc[df_laps["Stint"] == stint]["Compound"].unique())
+
+    # Plot the datapoints of each stint.
+    ax2.scatter(x,y,s = 20, alpha = 0.5, c = Compounds_Colors[compound],
+                label =  f"Stint:{stint} {compound}")
+
+    # Fit a line to the data to extract the Lap Time rate of change per lap, per stint. 
+
+    # Remove from y the outliers, with Interquartile method. 
+    Q1 = y.quantile(0.25)
+    Q3 = y.quantile(0.75)
+    IQR = Q3 - Q1
+    x = x[(y> Q1 - 1.5*IQR) & (y < Q3 + 1.5*IQR)]
+    y = y[(y> Q1 - 1.5*IQR) & (y < Q3 + 1.5*IQR)]
+
+    # Perform Linear Interpolation of x and y
+    slope, intercept = np.polyfit(x,y,1)
+    x_fit = np.linspace(np.min(x), np.max(x), 100)
+    y_fit = slope *x_fit + intercept
+
+    # Plot the fit line in the plot. 
+    ax2.plot(x_fit,y_fit,c = Compounds_Colors[compound])
+    ax2.text(
+        int(0.75*x_fit[-1]), int(y_fit[-1]) + counter*7,
+        f"{slope:.3f} sec/lap",
+        bbox = dict(facecolor = "black", alpha = 0.8, edgecolor = Compounds_Colors[compound]),
+        fontsize = 9,
+        clip_on = True,
+        zorder = 20
+    )
+ax2.legend()
+ax2.yaxis.set_major_formatter(ticker.FuncFormatter(format_laptime))
+ax2.yaxis.set_major_locator(MaxNLocator(nbins = 15))
+
+# Plot 3: simplified telemetry of a lap number "n_lap" of the selected driver "Driver" .
+n_lap = 10
+
+# Extract correct lap from database
+laps = df_laps["LapNumber"].unique()
+lap = laps[n_lap]
+Lap = df_laps.loc[df_laps["LapNumber"] == lap]
+
+# Load telemetry data for the selected lap.
+telemetry = Lap.get_car_data().add_distance()
+
+# Choose the channels to add to the plot
+Tel_Data = ["Speed", "RPM", "Throttle"]
+
+# Add the plots for each channel (to update, must make so that adding channels automatically changes the plotting layout, adds the new channels to plot and makes the correct annotations).
+ax3 = fig.add_subplot(gs[0:2,7:])
+ax3.grid(True)
+ax3.set_ylabel("Velocity [km/h]")
+ax3.plot(telemetry["Distance"] /1000, telemetry[Tel_Data[0]], label = Driver)
+ax3.set_title(f"Telemetry: {Tel_Data[0]} - {Tel_Data[1]} - {Tel_Data[2]}")
+
+ax3 = fig.add_subplot(gs[2:4,7:])
+ax3.grid(True)
+ax3.set_ylabel("RPM")
+ax3.plot(telemetry["Distance"] /1000, telemetry[Tel_Data[1]], label = Driver, color = "red")
+
+ax3 = fig.add_subplot(gs[4:6,7:])
+ax3.grid(True)
+ax3.set_xlabel(" Distance [km]")
+ax3.set_ylabel("Throttle %")
+ax3.plot(telemetry["Distance"] /1000, telemetry[Tel_Data[2]], label = Driver, color = "orange")
+
+# Plot 4: Map visualisation with speed-based color mapping. 
+
+# Select the X and Y coordinates of the car from telemtry data.
+# Don't change the variable names x_map and y_map to maintain the code working. 
+# If interested in rotating the map 90 degrees, simply switch the "X" and "Y" when selecting from telemetry[""].
+x_map = Lap.telemetry["Y"]
+y_map = Lap.telemetry["X"]
+speed = Lap.telemetry["Speed"]
+
+# Plot the points with colour depending on speed. 
+points = np.array([x_map,y_map]).T.reshape(-1,1,2)
+segments = np.concatenate([points[:-1], points[1:]], axis = 1)
+ax4 = fig.add_subplot(gs[7:,8:12])
+ax4.axis("off")
+ax4.plot(x_map, y_map, color = "black", linestyle = '-', linewidth = 7, zorder = 0)
+norm = mcolors.Normalize(vmin = np.min(speed), vmax = np.max(speed))
+lc = LineCollection(segments, cmap = "jet", norm = norm)
+lc.set_array(speed)
+lc.set_linewidth(5)
+line = ax4.add_collection(lc)
+ax4.set_aspect('equal', 'box')
+
+# Add a colorbar for the speed values. 
+cbar = fig.colorbar(
+    lc,
+    ax=ax4,
+    orientation='vertical',
+    fraction=0.046,   # width relative to the width of the figure
+    pad=0.02          # distanzce from the map
+)
+cbar.set_label("Speed [km/h]", fontsize=10)
+cbar.ax.tick_params(labelsize=9)
+plt.show()
+
+
+# Page 2: 
+# Load Session 1
+GP1 = "Australian Grand Prix"
+Session1 = "Q"
+Driver1 = "ANT"
+Year1 = 2026
+session1 = ff1.get_session(Year1, GP1, Session1)
+session1.load(weather=False, telemetry = True, laps = True)
+
+# Session 2: Added to allow comparison of laps in two different events (ex. 2025 and 2026 comparison)
+GP2  = "Australian Grand Prix"
+Session2 = "Q"
+Driver2 = "ANT"
+Year2 = 2025
+session2 = ff1.get_session(Year2, GP2, Session2)
+session2.load(weather = False, telemetry = True, laps = True)
+
+load_page_2(session1,session2,
+            driver_A = Driver1, driver_B = Driver2,
+            lap_A = "fastest", lap_B = "fastest", 
+            channels = ["Speed", "Throttle", "Brake","nGear","Time"])
+
+
+# Comment or Uncomment to load different pages, depending on needs!
+
+# load_page_3(GP, Year, Driver)
+# load_page_4(session, drivers = ["VER","HAM", "ALO", "LEC", "RUS", "NOR", "PIA"], n_clusters = 3)
+plt.show()
+
+
+
